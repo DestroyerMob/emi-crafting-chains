@@ -25,6 +25,8 @@ the player to build with.
   output, energy, and maintenance hatches to be removed for a shell request.
 - Keeps the existing local **Craft Chain** path for player inventory, AE2, and
   Tom's Simple Storage, with configurable animation speed and strength limits.
+- Tracks reusable crafting-tool durability and charge across a batch, consuming
+  the remaining uses before sourcing or crafting a replacement tool.
 
 ## AE2 workflow
 

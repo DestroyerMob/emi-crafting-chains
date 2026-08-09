@@ -32,7 +32,8 @@ public record CraftPlan(
         requirements = List.copyOf(requirements);
         surplus = List.copyOf(surplus);
         craftedSteps = craftedSteps.stream()
-                .map(step -> new CraftedStep(step.recipe(), step.inputs(), step.output()))
+                .map(step -> new CraftedStep(
+                        step.recipe(), step.inputs(), step.output(), step.remainders()))
                 .toList();
         visualSteps = compactSteps(craftedSteps);
         completedAmounts = List.copyOf(completedAmounts);
@@ -89,10 +90,20 @@ public record CraftPlan(
         return List.copyOf(ordered);
     }
 
-    public record CraftedStep(CraftingRecipe recipe, List<ItemStack> inputs, ItemStack output) {
+    public record CraftedStep(
+            CraftingRecipe recipe,
+            List<ItemStack> inputs,
+            ItemStack output,
+            List<ItemStack> remainders
+    ) {
+        public CraftedStep(CraftingRecipe recipe, List<ItemStack> inputs, ItemStack output) {
+            this(recipe, inputs, output, List.of());
+        }
+
         public CraftedStep {
             inputs = inputs.stream().map(ItemStack::copy).toList();
             output = output.copy();
+            remainders = remainders.stream().map(ItemStack::copy).toList();
         }
     }
 
@@ -104,7 +115,7 @@ public record CraftPlan(
         private static StepKey of(CraftedStep step) {
             return new StepKey(
                     step.recipe().getId(),
-                    step.inputs().stream().map(StackKey::of).toList(),
+                    step.inputs().stream().map(StackKey::forBatching).toList(),
                     StackKey.of(step.output())
             );
         }
@@ -114,14 +125,17 @@ public record CraftPlan(
         private final CraftingRecipe recipe;
         private final List<ItemStack> inputs;
         private final ItemStack output;
+        private final List<ItemStack> lastRemainders;
 
         private MutableStep(CraftedStep template) {
             recipe = template.recipe();
             inputs = new ArrayList<>(template.inputs().size());
+            lastRemainders = new ArrayList<>(template.inputs().size());
             for (ItemStack stack : template.inputs()) {
                 ItemStack emptyCount = stack.copy();
                 emptyCount.setCount(0);
                 inputs.add(emptyCount);
+                lastRemainders.add(ItemStack.EMPTY);
             }
             output = template.output().copy();
             output.setCount(0);
@@ -130,7 +144,20 @@ public record CraftPlan(
         private void add(CraftedStep step) {
             for (int index = 0; index < inputs.size(); index++) {
                 ItemStack addition = step.inputs().get(index);
-                if (!addition.isEmpty()) {
+                if (addition.isEmpty()) {
+                    continue;
+                }
+                if (StackKey.isReusableCraftingTool(addition)) {
+                    ItemStack previousRemainder = lastRemainders.get(index);
+                    if (previousRemainder.isEmpty()
+                            || !ItemStack.isSameItemSameTags(previousRemainder, addition)) {
+                        inputs.get(index).grow(1);
+                    }
+                    ItemStack nextRemainder = index < step.remainders().size()
+                            ? step.remainders().get(index).copy()
+                            : ItemStack.EMPTY;
+                    lastRemainders.set(index, nextRemainder);
+                } else {
                     inputs.get(index).grow(addition.getCount());
                 }
             }
@@ -138,7 +165,7 @@ public record CraftPlan(
         }
 
         private CraftedStep finish() {
-            return new CraftedStep(recipe, inputs, output);
+            return new CraftedStep(recipe, inputs, output, List.of());
         }
 
         private boolean dependsOn(MutableStep producer) {
@@ -146,7 +173,8 @@ public record CraftPlan(
                 return false;
             }
             for (ItemStack input : inputs) {
-                if (!input.isEmpty() && ItemStack.isSameItemSameTags(input, producer.output)) {
+                if (!input.isEmpty() && (ItemStack.isSameItemSameTags(input, producer.output)
+                        || StackKey.sameForBatching(input, producer.output))) {
                     return true;
                 }
             }

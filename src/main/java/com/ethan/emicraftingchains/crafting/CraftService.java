@@ -110,7 +110,7 @@ public final class CraftService {
                 continue;
             }
             availableByStack.merge(
-                    StackKey.of(entry.stack()),
+                    StackKey.forBatching(entry.stack()),
                     entry.amount(),
                     CraftService::saturatedAdd
             );
@@ -122,7 +122,7 @@ public final class CraftService {
             if (queried.isEmpty()) {
                 continue;
             }
-            StackKey key = StackKey.of(queried);
+            StackKey key = StackKey.forBatching(queried);
             if (seen.putIfAbsent(key, Boolean.TRUE) != null) {
                 continue;
             }

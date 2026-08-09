@@ -257,7 +257,7 @@ public final class RecipePlanner {
                 }
             }
             addStock(output, output.getCount(), false);
-            craftedSteps.add(new CraftedStep(recipe, matrixItems(matrix), output));
+            craftedSteps.add(new CraftedStep(recipe, matrixItems(matrix), output, remaining));
             return output.copy();
         } catch (PlanFailure failure) {
             restoreState(before);
