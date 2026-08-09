@@ -1,0 +1,16 @@
+{
+  "button.emi_crafting_chains.craft_chain": "Craft Chain",
+  "button.emi_crafting_chains.craft_chain_checking": "Craft Chain (checking...)",
+  "button.emi_crafting_chains.craft_chain_max": "Craft Chain (max %s)",
+  "tooltip.emi_crafting_chains.craft_chain": "Craft this EMI recipe tree using the selected recipes and batch count",
+  "message.emi_crafting_chains.success": "Crafted %1$s x%2$s",
+  "message.emi_crafting_chains.busy": "Already crafting another recipe",
+  "message.emi_crafting_chains.cancelled": "Crafting cancelled because the crafting screen was closed",
+  "message.emi_crafting_chains.no_recipe": "No crafting-table recipe for %s",
+  "message.emi_crafting_chains.invalid_recipe": "The selected EMI chain does not start with a crafting-table recipe",
+  "message.emi_crafting_chains.invalid_chain": "The selected EMI chain contains a non-crafting step",
+  "message.emi_crafting_chains.missing": "Missing material: %s",
+  "message.emi_crafting_chains.too_complex": "Recipe chain is too large or contains a loop",
+  "message.emi_crafting_chains.changed": "Available items changed; nothing was crafted",
+  "message.emi_crafting_chains.failed": "Could not auto-craft %s"
+}
