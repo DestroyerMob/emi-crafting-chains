@@ -1,6 +1,7 @@
 package com.ethan.emicraftingchains.crafting;
 
 import com.ethan.emicraftingchains.EmiCraftingChains;
+import com.ethan.emicraftingchains.config.AutoCraftConfig;
 import com.ethan.emicraftingchains.crafting.CraftPlan.CraftedStep;
 import com.ethan.emicraftingchains.storage.ItemSources;
 import com.ethan.emicraftingchains.storage.ItemSources.CommitResult;
@@ -10,7 +11,6 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.crafting.Recipe;
@@ -30,10 +30,7 @@ public final class CraftService {
 
     public static void craft(
             ServerPlayer player,
-            ResourceLocation requestedItemId,
-            ResourceLocation preferredRecipeId,
-            List<ResourceLocation> chainRecipeIds,
-            int batches
+            List<CraftTarget> targets
     ) {
         long gameTick = player.serverLevel().getGameTime();
         Long previousTick = LAST_REQUEST_TICK.put(player.getUUID(), gameTick);
@@ -44,23 +41,24 @@ public final class CraftService {
             player.displayClientMessage(Component.translatable("message.emi_crafting_chains.busy"), true);
             return;
         }
-
-        Item requestedItem = BuiltInRegistries.ITEM.get(requestedItemId);
-        if (requestedItem == Items.AIR || !BuiltInRegistries.ITEM.containsKey(requestedItemId)) {
+        if (!AutoCraftConfig.ENABLED.get()) {
+            player.displayClientMessage(Component.translatable("message.emi_crafting_chains.disabled"), true);
+            return;
+        }
+        if (!validTargets(targets)) {
+            player.displayClientMessage(Component.translatable("message.emi_crafting_chains.request_too_large"), true);
             return;
         }
 
         SourceGroup sources = ItemSources.forPlayer(player);
         final CraftPlan plan;
         try {
-            plan = new RecipePlanner(player, sources.snapshot(), chainRecipeIds)
-                    .plan(requestedItem, preferredRecipeId, batches);
+            plan = new RecipePlanner(player, sources.snapshot()).plan(targets);
         } catch (PlanFailure failure) {
             EmiCraftingChains.LOGGER.info(
-                    "Rejected EMI craft chain for {} (item={}, root={}): {}",
+                    "Rejected EMI craft chain for {} (targets={}): {}",
                     player.getGameProfile().getName(),
-                    requestedItemId,
-                    preferredRecipeId,
+                    targets.size(),
                     failure.messageComponent().getString()
             );
             player.displayClientMessage(failure.messageComponent(), true);
@@ -68,10 +66,9 @@ public final class CraftService {
         }
 
         EmiCraftingChains.LOGGER.info(
-                "Planned EMI craft chain for {}: output={}x{}, crafts={}, visual steps={}, sourced stacks={}",
+                "Planned EMI craft chain for {}: deliveries={}, crafts={}, visual steps={}, sourced stacks={}",
                 player.getGameProfile().getName(),
-                BuiltInRegistries.ITEM.getKey(plan.delivery().getItem()),
-                plan.delivery().getCount(),
+                plan.deliveries().size(),
                 plan.craftedSteps().size(),
                 plan.visualSteps().size(),
                 plan.requirements().size()
@@ -100,9 +97,7 @@ public final class CraftService {
      */
     public static ChainAvailability analyze(
             ServerPlayer player,
-            ResourceLocation requestedItemId,
-            ResourceLocation preferredRecipeId,
-            List<ResourceLocation> chainRecipeIds,
+            List<CraftTarget> targets,
             List<ItemStack> queriedStacks,
             int maximumBatches
     ) {
@@ -138,12 +133,22 @@ public final class CraftService {
         }
 
         int craftableBatches = 0;
-        Item requestedItem = BuiltInRegistries.ITEM.get(requestedItemId);
-        if (requestedItem != Items.AIR && BuiltInRegistries.ITEM.containsKey(requestedItemId)) {
+        if (AutoCraftConfig.ENABLED.get() && validTargets(targets)) {
             try {
-                CraftPlan maximumPlan = new RecipePlanner(player, snapshot, chainRecipeIds)
-                        .plan(requestedItem, preferredRecipeId, maximumBatches);
-                craftableBatches = maximumPlan.craftedBatches();
+                List<CraftTarget> maximumTargets = new ArrayList<>(targets);
+                CraftTarget current = maximumTargets.get(maximumTargets.size() - 1);
+                if (!current.useExisting()) {
+                    maximumTargets.set(maximumTargets.size() - 1, new CraftTarget(
+                            current.stack(),
+                            current.preferredRecipeId(),
+                            current.chainRecipeIds(),
+                            current.suppliedOnly(),
+                            Math.min(maximumBatches, AutoCraftConfig.MAX_BATCHES_PER_TARGET.get()),
+                            false
+                    ));
+                }
+                CraftPlan maximumPlan = new RecipePlanner(player, snapshot).plan(maximumTargets);
+                craftableBatches = current.useExisting() ? 1 : maximumPlan.craftedBatches();
             } catch (PlanFailure ignored) {
                 // Zero is the useful availability result for an invalid or
                 // presently impossible chain; crafting will still report the
@@ -152,6 +157,34 @@ public final class CraftService {
         }
 
         return new ChainAvailability(List.copyOf(relevantAvailability), craftableBatches);
+    }
+
+    private static boolean validTargets(List<CraftTarget> targets) {
+        if (targets.isEmpty()) {
+            return false;
+        }
+        long materialItems = 0;
+        for (CraftTarget target : targets) {
+            ItemStack stack = target.stack();
+            ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
+            if (stack.isEmpty() || stack.getItem() == Items.AIR
+                    || !BuiltInRegistries.ITEM.containsKey(itemId)
+                    || target.amount() < 1) {
+                return false;
+            }
+            if (!target.useExisting()
+                    && (target.preferredRecipeId() == null
+                    || target.amount() > AutoCraftConfig.MAX_BATCHES_PER_TARGET.get())) {
+                return false;
+            }
+            if (target.useExisting()) {
+                materialItems = saturatedAdd(materialItems, target.amount());
+                if (materialItems > AutoCraftConfig.MAX_MATERIAL_ITEMS.get()) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static long saturatedAdd(long first, long second) {
@@ -183,25 +216,38 @@ public final class CraftService {
             return false;
         }
 
-        // The requested result goes to the player. Container items and batch surplus
+        // Requested results go to the player. Container items and batch surplus
         // return to the open network first, then the player, then the ground.
-        sources.insertOrDrop(player, plan.delivery(), plan.delivery().getCount(), false);
+        for (StackAmount delivery : plan.deliveries()) {
+            sources.insertOrDrop(player, delivery.stack(), delivery.amount(), false);
+        }
         for (StackAmount surplus : plan.surplus()) {
             sources.insertOrDrop(player, surplus.stack(), surplus.amount(), true);
         }
 
         awardCrafting(player, plan.craftedSteps());
         player.containerMenu.broadcastChanges();
-        player.displayClientMessage(Component.translatable(
-                "message.emi_crafting_chains.success",
-                plan.delivery().getHoverName(),
-                plan.delivery().getCount()
-        ), true);
+        if (plan.deliveries().size() == 1) {
+            StackAmount delivery = plan.deliveries().get(0);
+            player.displayClientMessage(Component.translatable(
+                    "message.emi_crafting_chains.success",
+                    delivery.stack().getHoverName(),
+                    delivery.amount()
+            ), true);
+        } else {
+            long deliveredItems = plan.deliveries().stream()
+                    .mapToLong(StackAmount::amount)
+                    .reduce(0L, CraftService::saturatedAdd);
+            player.displayClientMessage(Component.translatable(
+                    "message.emi_crafting_chains.success_multiple",
+                    deliveredItems,
+                    plan.deliveries().size()
+            ), true);
+        }
         EmiCraftingChains.LOGGER.info(
-                "Completed EMI craft chain for {}: {}x{}",
+                "Completed EMI craft chain for {}: {} delivery stacks",
                 player.getGameProfile().getName(),
-                BuiltInRegistries.ITEM.getKey(plan.delivery().getItem()),
-                plan.delivery().getCount()
+                plan.deliveries().size()
         );
         return true;
     }

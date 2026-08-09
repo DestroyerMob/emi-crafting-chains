@@ -10,31 +10,40 @@ import java.util.List;
 import java.util.Map;
 
 public record CraftPlan(
-        ItemStack delivery,
+        List<StackAmount> deliveries,
         List<StackAmount> requirements,
         List<StackAmount> surplus,
         List<CraftedStep> craftedSteps,
         List<CraftedStep> visualSteps,
-        int craftedBatches
+        List<Integer> completedAmounts
 ) {
     public CraftPlan(
-            ItemStack delivery,
+            List<StackAmount> deliveries,
             List<StackAmount> requirements,
             List<StackAmount> surplus,
             List<CraftedStep> craftedSteps,
-            int craftedBatches
+            List<Integer> completedAmounts
     ) {
-        this(delivery, requirements, surplus, craftedSteps, List.of(), craftedBatches);
+        this(deliveries, requirements, surplus, craftedSteps, List.of(), completedAmounts);
     }
 
     public CraftPlan {
-        delivery = delivery.copy();
+        deliveries = List.copyOf(deliveries);
         requirements = List.copyOf(requirements);
         surplus = List.copyOf(surplus);
         craftedSteps = craftedSteps.stream()
                 .map(step -> new CraftedStep(step.recipe(), step.inputs(), step.output()))
                 .toList();
         visualSteps = compactSteps(craftedSteps);
+        completedAmounts = List.copyOf(completedAmounts);
+    }
+
+    public ItemStack delivery() {
+        return deliveries.isEmpty() ? ItemStack.EMPTY : deliveries.get(deliveries.size() - 1).stack().copy();
+    }
+
+    public int craftedBatches() {
+        return completedAmounts.isEmpty() ? 0 : completedAmounts.get(completedAmounts.size() - 1);
     }
 
     /**

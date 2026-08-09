@@ -1,6 +1,7 @@
 package com.ethan.emicraftingchains.crafting;
 
 import com.ethan.emicraftingchains.crafting.CraftPlan.CraftedStep;
+import com.ethan.emicraftingchains.config.AutoCraftConfig;
 import com.ethan.emicraftingchains.network.CraftNetwork;
 import com.ethan.emicraftingchains.storage.ItemSources.SourceGroup;
 import net.minecraft.network.chat.Component;
@@ -19,7 +20,6 @@ import java.util.Map;
 import java.util.UUID;
 
 public final class CraftJobManager {
-    private static final int TICKS_PER_STEP = 10;
     private static final Map<UUID, CraftJob> JOBS = new HashMap<>();
 
     private CraftJobManager() {
@@ -30,7 +30,7 @@ public final class CraftJobManager {
     }
 
     public static void start(ServerPlayer player, CraftPlan plan, SourceGroup sources) {
-        if (plan.visualSteps().isEmpty()) {
+        if (plan.visualSteps().isEmpty() || !AutoCraftConfig.ANIMATE_STEPS.get()) {
             CraftService.complete(player, plan, sources);
             return;
         }
@@ -71,7 +71,7 @@ public final class CraftJobManager {
 
             job.stepIndex++;
             if (job.stepIndex < job.plan.visualSteps().size()) {
-                job.ticksRemaining = TICKS_PER_STEP;
+                job.ticksRemaining = stepTicks();
                 showStep(player, job);
             } else {
                 iterator.remove();
@@ -94,7 +94,11 @@ public final class CraftJobManager {
         CraftedStep step = job.plan.visualSteps().get(job.stepIndex);
         int number = job.stepIndex + 1;
         int total = job.plan.visualSteps().size();
-        CraftNetwork.sendProgress(player, step.inputs(), step.output(), number, total);
+        CraftNetwork.sendProgress(player, step.inputs(), step.output(), number, total, stepTicks());
+    }
+
+    private static int stepTicks() {
+        return AutoCraftConfig.STEP_TICKS.get();
     }
 
     private static final class CraftJob {
@@ -102,7 +106,7 @@ public final class CraftJobManager {
         private final CraftPlan plan;
         private final SourceGroup sources;
         private int stepIndex;
-        private int ticksRemaining = TICKS_PER_STEP;
+        private int ticksRemaining = stepTicks();
 
         private CraftJob(AbstractContainerMenu startingMenu, CraftPlan plan, SourceGroup sources) {
             this.startingMenu = startingMenu;

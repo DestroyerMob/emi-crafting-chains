@@ -14,19 +14,18 @@ import java.util.Comparator;
 import java.util.List;
 
 public final class CraftingGridAnimator {
-    private static final long INPUT_PHASE_MILLIS = 375L;
-    private static final long STEP_MILLIS = 500L;
-
     private static List<ItemStack> inputs = List.of();
     private static ItemStack output = ItemStack.EMPTY;
     private static long startedAt;
+    private static long stepMillis = 500L;
 
     private CraftingGridAnimator() {
     }
 
-    public static void show(List<ItemStack> ingredientStacks, ItemStack result) {
+    public static void show(List<ItemStack> ingredientStacks, ItemStack result, int durationTicks) {
         inputs = ingredientStacks.stream().map(ItemStack::copy).toList();
         output = result.copy();
+        stepMillis = Math.max(50L, durationTicks * 50L);
         startedAt = System.currentTimeMillis();
     }
 
@@ -37,7 +36,7 @@ public final class CraftingGridAnimator {
         }
 
         long elapsed = System.currentTimeMillis() - startedAt;
-        if (output.isEmpty() || elapsed < 0 || elapsed >= STEP_MILLIS) {
+        if (output.isEmpty() || elapsed < 0 || elapsed >= stepMillis) {
             return;
         }
 
@@ -48,7 +47,7 @@ public final class CraftingGridAnimator {
 
         Minecraft minecraft = Minecraft.getInstance();
         GuiGraphics graphics = event.getGuiGraphics();
-        if (elapsed < INPUT_PHASE_MILLIS) {
+        if (elapsed < stepMillis * 3 / 4) {
             for (int i = 0; i < Math.min(inputs.size(), layout.inputs.size()); i++) {
                 ItemStack stack = inputs.get(i);
                 if (!stack.isEmpty()) {

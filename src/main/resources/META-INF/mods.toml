@@ -8,8 +8,8 @@ version="${mod_version}"
 displayName="${mod_name}"
 authors="${mod_authors}"
 description='''
-Craft selected EMI recipe chains, recursively crafting ordinary crafting-table
-ingredients from the player inventory, AE2, or Tom's Storage.
+Select a multiblock through EMI, prune optional structure entries, encode the
+result with AE2's normal pattern workflow, and request every missing block.
 '''
 
 [[dependencies.${mod_id}]]
@@ -35,7 +35,7 @@ side="CLIENT"
 
 [[dependencies.${mod_id}]]
 modId="ae2"
-mandatory=false
+mandatory=true
 versionRange="[15.4.10,)"
 ordering="AFTER"
 side="BOTH"

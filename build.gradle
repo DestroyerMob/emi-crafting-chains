@@ -9,7 +9,7 @@ version = mod_version
 group = mod_group_id
 
 base {
-    archivesName = 'emi-crafting-chains'
+    archivesName = 'multiblock-patterns'
 }
 
 java {
@@ -25,7 +25,7 @@ minecraft {
             workingDirectory project.file('run')
             property 'forge.logging.console.level', 'info'
             mods {
-                emi_crafting_chains { source sourceSets.main }
+                multiblock_patterns { source sourceSets.main }
             }
         }
 
@@ -33,7 +33,7 @@ minecraft {
             workingDirectory project.file('run')
             property 'forge.logging.console.level', 'info'
             mods {
-                emi_crafting_chains { source sourceSets.main }
+                multiblock_patterns { source sourceSets.main }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.ethan.emicraftingchains.crafting;
 
 import com.ethan.emicraftingchains.crafting.CraftPlan.CraftedStep;
+import com.ethan.emicraftingchains.config.AutoCraftConfig;
 import com.ethan.emicraftingchains.storage.StackAmount;
 import net.minecraft.core.NonNullList;
 import net.minecraft.network.chat.Component;
@@ -33,8 +34,6 @@ import java.util.Set;
  */
 public final class RecipePlanner {
     private static final int MAX_DEPTH = 40;
-    private static final int MAX_ATTEMPTS = 2_048;
-    private static final int MAX_SUCCESSFUL_CRAFTS = 512;
     private static final PlannerMenu MENU = new PlannerMenu();
 
     private final ServerPlayer player;
@@ -43,12 +42,12 @@ public final class RecipePlanner {
     private final List<CraftedStep> craftedSteps = new ArrayList<>();
     private final Map<Item, List<CraftingRecipe>> recipesByOutput = new HashMap<>();
     private final Map<Item, ResourceLocation> preferredRecipeByOutput = new HashMap<>();
+    private List<ItemStack> suppliedOnly = List.of();
     private int attempts;
 
     public RecipePlanner(
             ServerPlayer player,
-            List<StackAmount> available,
-            List<ResourceLocation> chainRecipeIds
+            List<StackAmount> available
     ) {
         this.player = player;
         for (StackAmount entry : available) {
@@ -60,6 +59,10 @@ public final class RecipePlanner {
                 recipesByOutput.computeIfAbsent(output.getItem(), ignored -> new ArrayList<>()).add(recipe);
             }
         }
+    }
+
+    private void applyPreferredRecipes(List<ResourceLocation> chainRecipeIds) {
+        preferredRecipeByOutput.clear();
         for (ResourceLocation recipeId : chainRecipeIds) {
             Recipe<?> recipe = player.level().getRecipeManager().byKey(recipeId).orElse(null);
             if (recipe == null) {
@@ -74,6 +77,47 @@ public final class RecipePlanner {
 
     public CraftPlan plan(Item requestedItem, ResourceLocation preferredRecipe, int requestedBatches)
             throws PlanFailure {
+        return plan(List.of(CraftTarget.recipe(
+                new ItemStack(requestedItem),
+                preferredRecipe,
+                List.of(),
+                requestedBatches
+        )));
+    }
+
+    public CraftPlan plan(List<CraftTarget> targets) throws PlanFailure {
+        if (targets.isEmpty()) {
+            throw new PlanFailure(Component.translatable("message.emi_crafting_chains.invalid_chain"));
+        }
+
+        Map<StackKey, Long> deliveries = new LinkedHashMap<>();
+        List<Integer> completedAmounts = new ArrayList<>(targets.size());
+        for (CraftTarget target : targets) {
+            if (target.stack().isEmpty() || target.amount() <= 0) {
+                throw new PlanFailure(Component.translatable("message.emi_crafting_chains.invalid_chain"));
+            }
+            applyPreferredRecipes(target.chainRecipeIds());
+            suppliedOnly = target.suppliedOnly();
+            PlannedTarget planned = target.useExisting()
+                    ? planMaterialTarget(target)
+                    : planRecipeTarget(target);
+            deliveries.merge(StackKey.of(planned.stack()), planned.amount(), RecipePlanner::saturatedAdd);
+            completedAmounts.add(planned.completedAmount());
+        }
+
+        return new CraftPlan(
+                amountList(deliveries),
+                amountList(requirements),
+                craftedSurplus(),
+                List.copyOf(craftedSteps),
+                completedAmounts
+        );
+    }
+
+    private PlannedTarget planRecipeTarget(CraftTarget target) throws PlanFailure {
+        Item requestedItem = target.stack().getItem();
+        ResourceLocation preferredRecipe = target.preferredRecipeId();
+        int requestedBatches = target.amount();
         CraftingRecipe root = selectRootRecipe(requestedItem, preferredRecipe);
         ItemStack preview = preview(root);
         if (preview.isEmpty() || preview.getItem() != requestedItem) {
@@ -81,13 +125,12 @@ public final class RecipePlanner {
         }
 
         ItemStack deliveryTemplate = ItemStack.EMPTY;
-        int deliveryCount = 0;
-        int maximum = preview.getMaxStackSize();
-        int batchTarget = Math.max(1, Math.min(requestedBatches, MAX_SUCCESSFUL_CRAFTS));
+        long deliveryCount = 0;
+        int batchTarget = Math.max(1, Math.min(requestedBatches, AutoCraftConfig.MAX_CRAFTING_OPERATIONS.get()));
         int craftedBatches = 0;
         PlanFailure lastFailure = null;
 
-        while (deliveryCount < maximum && craftedBatches < batchTarget) {
+        while (craftedBatches < batchTarget) {
             State beforeBatch = snapshotState();
             try {
                 Set<Item> activeOutputs = new HashSet<>();
@@ -101,10 +144,6 @@ public final class RecipePlanner {
                     deliveryTemplate.setCount(1);
                 } else if (!ItemStack.isSameItemSameTags(deliveryTemplate, output)) {
                     throw new PlanFailure(Component.translatable("message.emi_crafting_chains.failed", preview.getHoverName()));
-                }
-                if (deliveryCount + output.getCount() > maximum) {
-                    restoreState(beforeBatch);
-                    break;
                 }
                 deliveryCount += output.getCount();
                 craftedBatches++;
@@ -126,14 +165,32 @@ public final class RecipePlanner {
         }
 
         ItemStack delivery = deliveryTemplate.copy();
-        delivery.setCount(deliveryCount);
-        return new CraftPlan(
-                delivery,
-                amountList(requirements),
-                craftedSurplus(),
-                List.copyOf(craftedSteps),
-                craftedBatches
-        );
+        delivery.setCount(1);
+        return new PlannedTarget(delivery, deliveryCount, craftedBatches);
+    }
+
+    private PlannedTarget planMaterialTarget(CraftTarget target) throws PlanFailure {
+        ItemStack requested = target.stack().copy();
+        requested.setCount(1);
+        int delivered = (int) takeUpToExact(requested, target.amount(), true);
+        ResourceLocation preferredRecipe = target.preferredRecipeId();
+        if (preferredRecipe == null) {
+            preferredRecipe = preferredRecipeByOutput.get(requested.getItem());
+        }
+
+        while (delivered < target.amount()) {
+            CraftingRecipe root = selectRootRecipe(requested.getItem(), preferredRecipe);
+            Set<Item> activeOutputs = new HashSet<>();
+            activeOutputs.add(requested.getItem());
+            ItemStack output = craftOne(root, activeOutputs, 0);
+            long acquired = takeUpToExact(requested, target.amount() - delivered, false);
+            if (output.isEmpty() || !ItemStack.isSameItemSameTags(requested, output) || acquired <= 0) {
+                throw new PlanFailure(Component.translatable(
+                        "message.emi_crafting_chains.failed", requested.getHoverName()));
+            }
+            delivered += (int) acquired;
+        }
+        return new PlannedTarget(requested, delivered, delivered);
     }
 
     private CraftingRecipe selectRootRecipe(Item requestedItem, ResourceLocation preferredRecipe)
@@ -157,7 +214,9 @@ public final class RecipePlanner {
     }
 
     private ItemStack craftOne(CraftingRecipe recipe, Set<Item> activeOutputs, int depth) throws PlanFailure {
-        if (depth > MAX_DEPTH || ++attempts > MAX_ATTEMPTS || craftedSteps.size() >= MAX_SUCCESSFUL_CRAFTS) {
+        int maximumOperations = AutoCraftConfig.MAX_CRAFTING_OPERATIONS.get();
+        if (depth > MAX_DEPTH || ++attempts > maximumOperations * 4
+                || craftedSteps.size() >= maximumOperations) {
             throw tooComplex();
         }
 
@@ -242,6 +301,7 @@ public final class RecipePlanner {
                 throw new PlanFailure(Component.translatable("message.emi_crafting_chains.invalid_chain"));
             }
         }
+        candidates.removeIf(recipe -> isSuppliedOnly(preview(recipe)));
 
         for (CraftingRecipe candidate : candidates) {
             Item outputItem = preview(candidate).getItem();
@@ -271,6 +331,15 @@ public final class RecipePlanner {
         throw new PlanFailure(Component.translatable("message.emi_crafting_chains.missing", missing));
     }
 
+    private boolean isSuppliedOnly(ItemStack output) {
+        for (ItemStack supplied : suppliedOnly) {
+            if (ItemStack.isSameItemSameTags(supplied, output)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private ItemStack takeMatching(Ingredient ingredient) {
         for (boolean sourced : new boolean[]{false, true}) {
             for (Stock entry : stock) {
@@ -290,6 +359,14 @@ public final class RecipePlanner {
 
     private boolean takeExact(ItemStack template, long amount, boolean sourceFirst) {
         State before = snapshotState();
+        if (takeUpToExact(template, amount, sourceFirst) == amount) {
+            return true;
+        }
+        restoreState(before);
+        return false;
+    }
+
+    private long takeUpToExact(ItemStack template, long amount, boolean sourceFirst) {
         long remaining = amount;
         boolean[] order = sourceFirst ? new boolean[]{true, false} : new boolean[]{false, true};
         for (boolean sourced : order) {
@@ -305,12 +382,11 @@ public final class RecipePlanner {
                     requirements.merge(StackKey.of(entry.template), taken, Long::sum);
                 }
                 if (remaining == 0) {
-                    return true;
+                    return amount;
                 }
             }
         }
-        restoreState(before);
-        return false;
+        return amount - remaining;
     }
 
     private CraftingContainer makeMatrix(
@@ -402,6 +478,13 @@ public final class RecipePlanner {
 
     private PlanFailure tooComplex() {
         return new PlanFailure(Component.translatable("message.emi_crafting_chains.too_complex"));
+    }
+
+    private static long saturatedAdd(long first, long second) {
+        return first > Long.MAX_VALUE - second ? Long.MAX_VALUE : first + second;
+    }
+
+    private record PlannedTarget(ItemStack stack, long amount, int completedAmount) {
     }
 
     private static final class Stock {

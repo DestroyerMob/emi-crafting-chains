@@ -9,5 +9,6 @@ public final class ClientBootstrap {
     public static void register() {
         MinecraftForge.EVENT_BUS.register(ChainCraftHandler.class);
         MinecraftForge.EVENT_BUS.register(CraftingGridAnimator.class);
+        MinecraftForge.EVENT_BUS.register(MultiblockTreeHandler.class);
     }
 }
